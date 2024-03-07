@@ -1,43 +1,64 @@
 package main
 
 import (
-	"fmt"
+	"flag"
 	"go/parser"
-	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"go/token"
 
-	"github.com/brass-software/typescript"
+	"github.com/brass-software/go2ts/pkg/typescript"
 )
 
 func main() {
-	inDir := os.Args[1]
-	outDir := os.Args[2]
-	err := Exec(outDir, inDir)
+	flag.Parse()
+	dir := flag.Arg(0)
+	if dir == "" {
+		dir = "."
+	}
+	err := go2ts(dir)
 	if err != nil {
 		panic(err)
 	}
 }
 
-func Exec(outDir, inDir string) error {
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, inDir, func(fi fs.FileInfo) bool {
-		return strings.HasSuffix(fi.Name(), "_test.go")
-	}, parser.ParseComments)
+func go2ts(path string) error {
+	fi, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
-	if len(pkgs) != 1 {
-		return fmt.Errorf("expected one package per dir")
-	}
-	for _, pkg := range pkgs {
-		p, err := typescript.NewPackageFromGo(pkg)
+	if !fi.IsDir() {
+		fset := token.NewFileSet()
+		goFileAST, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 		if err != nil {
 			return err
 		}
-		return p.WriteToDir(outDir)
+		importer := typescript.GoImporter{}
+		tsFile, err := importer.NewFile(goFileAST)
+		if err != nil {
+			return err
+		}
+		goFileName := filepath.Base(path)
+		dir := filepath.Dir(path)
+		tsFileName := strings.TrimSuffix(goFileName, ".go") + ".ts"
+		f, err := os.Create(filepath.Join(dir, tsFileName))
+		if err != nil {
+			return err
+		}
+		return tsFile.Write(f)
 	}
-	panic("unreachable")
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		err = go2ts(filepath.Join(path, e.Name()))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
